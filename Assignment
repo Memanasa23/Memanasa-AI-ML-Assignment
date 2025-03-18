@@ -6,6 +6,7 @@ import faiss
 import torch
 from sentence_transformers import SentenceTransformer
 from flask import Flask, request, jsonify
+import sqlite3
 
 # Load Dataset
 df = pd.read_csv("hotel_bookings.csv")
@@ -39,6 +40,12 @@ embeddings = model.encode(texts.tolist(), convert_to_tensor=True).cpu().numpy()
 index = faiss.IndexFlatL2(embeddings.shape[1])
 index.add(embeddings)
 
+# Database Setup for Real-time Updates
+conn = sqlite3.connect('hotel_bookings.db', check_same_thread=False)
+cursor = conn.cursor()
+cursor.execute('''CREATE TABLE IF NOT EXISTS bookings (id INTEGER PRIMARY KEY, hotel TEXT, arrival_date_year INTEGER, arrival_date_month TEXT, adr REAL)''')
+conn.commit()
+
 # Flask API
 template = Flask(__name__)
 
@@ -59,5 +66,18 @@ def ask():
     response = texts.iloc[I[0][0]] if len(I[0]) > 0 else "No relevant information found."
     return jsonify({"response": response})
 
+@template.route("/update", methods=['POST'])
+def update_data():
+    data = request.json
+    cursor.execute("INSERT INTO bookings (hotel, arrival_date_year, arrival_date_month, adr) VALUES (?, ?, ?, ?)", 
+                   (data['hotel'], data['arrival_date_year'], data['arrival_date_month'], data['adr']))
+    conn.commit()
+    return jsonify({"message": "Data updated successfully"})
+
+@template.route("/health", methods=['GET'])
+def health_check():
+    return jsonify({"status": "running", "db_status": "connected"})
+
 if __name__ == "__main__":
     template.run(debug=True)
+
