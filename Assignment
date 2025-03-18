@@ -1,0 +1,63 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import faiss
+import torch
+from sentence_transformers import SentenceTransformer
+from flask import Flask, request, jsonify
+
+# Load Dataset
+df = pd.read_csv("hotel_bookings.csv")
+
+# Data Preprocessing
+df.fillna(method='ffill', inplace=True)  # Handle missing values
+
+def calculate_revenue(df):
+    df['total_revenue'] = df['adr'] * df['stays_in_week_nights']
+    return df[['arrival_date_year', 'arrival_date_month', 'total_revenue']]
+
+def cancellation_rate(df):
+    return (df['is_canceled'].sum() / len(df)) * 100
+
+def geographical_distribution(df):
+    return df['country'].value_counts()
+
+def booking_lead_time_distribution(df):
+    return df['lead_time'].describe()
+
+# Compute Analytics
+revenue_trends = calculate_revenue(df)
+cancel_rate = cancellation_rate(df)
+geography = geographical_distribution(df)
+lead_time_stats = booking_lead_time_distribution(df)
+
+# Implement FAISS for Q&A
+model = SentenceTransformer("all-MiniLM-L6-v2")
+texts = df[['hotel', 'arrival_date_year', 'arrival_date_month', 'adr']].astype(str).agg(' '.join, axis=1)
+embeddings = model.encode(texts.tolist(), convert_to_tensor=True).cpu().numpy()
+index = faiss.IndexFlatL2(embeddings.shape[1])
+index.add(embeddings)
+
+# Flask API
+template = Flask(__name__)
+
+@template.route("/analytics", methods=['POST'])
+def analytics():
+    return jsonify({
+        "revenue_trends": revenue_trends.to_dict(),
+        "cancellation_rate": cancel_rate,
+        "geographical_distribution": geography.to_dict(),
+        "lead_time_distribution": lead_time_stats.to_dict()
+    })
+
+@template.route("/ask", methods=['POST'])
+def ask():
+    query = request.json['question']
+    query_embedding = model.encode([query], convert_to_tensor=True).cpu().numpy()
+    D, I = index.search(query_embedding, 1)
+    response = texts.iloc[I[0][0]] if len(I[0]) > 0 else "No relevant information found."
+    return jsonify({"response": response})
+
+if __name__ == "__main__":
+    template.run(debug=True)
